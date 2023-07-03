@@ -19,20 +19,140 @@ const testmsg = struct {
     unt32: u32 = 3,
     unt64: u64 = 4,
     m: msg = msg{},
-    fn fun() void {}
 };
 
-pub fn main() u8 {
+pub fn main() !u8 {
     const testmsg1 = testmsg{};
-    pack(testmsg, testmsg1);
+    const ps = packSize(testmsg1);
+    var a: [ps]u8 = undefined;
+    _ = a;
+    std.debug.print("a len: {}\n", .{a.len});
+    pack(testmsg1);
 
     return 0;
 }
 
-fn pack(comptime packstruct: type, data: anytype) void {
-    _ = data;
+// to make this comptime I need to figure out the size first for the buffer aka Array
+fn packSize(data: anytype) comptime_int {
+
+    // obm: one byte mask
+    // tbm: two byte mask
+    // fbm: four byte mask
+    const obm = (2 ^ 8) - 1;
+    const tbm = (2 ^ 16) - 1;
+    const fbm = (2 ^ 32) - 1;
+
+    var pack_size: usize = 0;
     // this part is for struct
-    switch (@typeInfo(packstruct)) {
+
+    switch (@typeInfo(@TypeOf(data))) {
+        .Bool => {
+            pack_size += 1;
+        },
+        .Float => |f| {
+            if (f.bits == 32 or f.bits == 64) {
+                pack_size += 1 + f.bits / 8;
+            } else {
+                @compileError("MsgPack does not support Float 16 or Float 128");
+            }
+        },
+        .Int => |i| {
+            pack_size += 1 + (i.bits / 8);
+        },
+        .Array => |a| {
+            if (@TypeOf(a.child) == u8) {
+                // parse as str
+                if (a.sentinel) {
+                    if (a.len <= 31) {
+                        pack_size += 1;
+                    } else if (a.len > 31 and a.len <= obm) {
+                        pack_size += 2;
+                    } else if (a.len > obm and a.len <= tbm) {
+                        pack_size += 3;
+                    } else if (a.len > tbm and a.len <= fbm) {
+                        pack_size += 4;
+                    } else {
+                        @compileError("[_:0]u8 is too large for MsgPack");
+                    }
+                } else {
+                    // parse as bin
+                    if (a.len <= obm) {
+                        pack_size += 2;
+                    } else if (a.len > obm and a.len <= tbm) {
+                        pack_size += 3;
+                    } else if (a.len > tbm and a.len <= fbm) {
+                        pack_size += 5;
+                    } else {
+                        @compileError("[_]u8 is too large for MsgPack");
+                    }
+                }
+                pack_size += a.len;
+            } else {
+                // parse as array
+                if (a.len <= 15) {
+                    pack_size += 1;
+                } else if (a.len > 15 and a.len <= obm) {
+                    pack_size += 3;
+                } else if (a.len > tbm and a.len <= fbm) {
+                    pack_size += 5;
+                } else {
+                    @compileError("[]Type is too large for MsgPack");
+                }
+                pack_size += a.len * packSize(a.child);
+            }
+        },
+        .Struct => |s| {
+            // parse as array
+            if (s.fields.len <= 15) {
+                pack_size += 1;
+            } else if (s.fields.len > 15 and s.fields.len <= obm) {
+                pack_size += 3;
+            } else if (s.fields.len > tbm and s.fields.len <= fbm) {
+                pack_size += 5;
+            } else {
+                @compileError("[]Type is too large for MsgPack");
+            }
+            inline for (s.fields) |f| {
+                pack_size += packSize(f.name);
+                pack_size += packSize(@field(data, f.name));
+            }
+        },
+        .Null => {
+            pack_size += 1;
+        },
+        .Pointer => |p| {
+            // string liters
+            const slice = std.builtin.TypeInfo.Pointer.Size.Slice;
+            if (p.child == u8 and p.size == slice and p.is_const) {
+                if (data.len <= 31) {
+                    pack_size += 1;
+                } else if (data.len > 31 and data.len <= obm) {
+                    pack_size += 2;
+                } else if (data.len > obm and data.len <= tbm) {
+                    pack_size += 3;
+                } else if (data.len > tbm and data.len <= fbm) {
+                    pack_size += 4;
+                } else {
+                    @compileError("[]const u8 is too large for MsgPack");
+                }
+                pack_size += data.len;
+            } else {
+                @compileError("Cannot Parse Pointer Type");
+            }
+        },
+        .Optional => {},
+        .Type => {},
+        else => |u| {
+            @compileLog(u);
+            @compileError("Type not supported");
+        },
+    }
+    return pack_size;
+}
+
+fn pack(data: anytype) void {
+    // this part is for struct
+    switch (@typeInfo(@TypeOf(data))) {
         .Bool => {
             std.debug.print("is a Bool {}\n", .{data});
         },
@@ -49,14 +169,18 @@ fn pack(comptime packstruct: type, data: anytype) void {
         },
         .Array => |a| {
             std.debug.print("is an []\n", .{});
-            for (data) |item| {
-                pack(a.child, item);
+            if (a.sentinel) |sent| {
+                std.debug.print("is an []\n", .{sent});
+            } else {
+                for (data) |item| {
+                    pack(item);
+                }
             }
         },
         .Struct => |s| {
             std.debug.print("is struct\n", .{});
             inline for (s.fields) |f| {
-                pack(f.field_type, @field(data, f.name));
+                pack(@field(data, f.name));
             }
         },
         .Optional => {
