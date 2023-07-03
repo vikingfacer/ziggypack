@@ -1,10 +1,8 @@
 const std = @import("std");
 
 const msg = struct {
-    float16: f16 = 0.0,
     float32: f32 = 0.02,
     float64: f64 = 0.0444,
-    float128: f128 = 0.2119214,
 };
 
 const testmsg = struct {
