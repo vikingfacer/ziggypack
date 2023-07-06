@@ -24,11 +24,15 @@ const testmsg = struct {
 pub fn main() !u8 {
     const testmsg1 = testmsg{};
     const ps = packSize(testmsg1);
-    var a: [ps]u8 = undefined;
-    _ = a;
+    var a = [_]u8{0} ** ps;
     std.debug.print("a len: {}\n", .{a.len});
-    pack(testmsg1);
 
+    var i: usize = 0;
+    pack(a[0..a.len], &i, testmsg1);
+
+    for (a) |item| {
+        std.debug.print("{x}", .{item});
+    }
     return 0;
 }
 
