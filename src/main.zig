@@ -35,6 +35,10 @@ pub fn main() !u8 {
     }
     return 0;
 }
+const hbm = 0x001F;
+const obm = 0x00FF;
+const tbm = 0x0FFF;
+const fbm = 0xFFFF;
 
 // to make this comptime I need to figure out the size first for the buffer aka Array
 fn packSize(data: anytype) comptime_int {
@@ -42,9 +46,6 @@ fn packSize(data: anytype) comptime_int {
     // obm: one byte mask
     // tbm: two byte mask
     // fbm: four byte mask
-    const obm = (2 ^ 8) - 1;
-    const tbm = (2 ^ 16) - 1;
-    const fbm = (2 ^ 32) - 1;
 
     var pack_size: usize = 0;
     // this part is for struct
