@@ -65,31 +65,18 @@ fn packSize(data: anytype) comptime_int {
             pack_size += 1 + (i.bits / 8);
         },
         .Array => |a| {
-            if (@TypeOf(a.child) == u8) {
-                // parse as str
-                if (a.sentinel) {
-                    if (a.len <= 31) {
-                        pack_size += 1;
-                    } else if (a.len > 31 and a.len <= obm) {
-                        pack_size += 2;
-                    } else if (a.len > obm and a.len <= tbm) {
-                        pack_size += 3;
-                    } else if (a.len > tbm and a.len <= fbm) {
-                        pack_size += 4;
-                    } else {
-                        @compileError("[_:0]u8 is too large for MsgPack");
-                    }
+            // parse as str
+            if (a.sentinel != null and @TypeOf(a.child) == u8) {
+                if (a.len <= 31) {
+                    pack_size += 1;
+                } else if (a.len > 31 and a.len <= obm) {
+                    pack_size += 2;
+                } else if (a.len > obm and a.len <= tbm) {
+                    pack_size += 3;
+                } else if (a.len > tbm and a.len <= fbm) {
+                    pack_size += 5;
                 } else {
-                    // parse as bin
-                    if (a.len <= obm) {
-                        pack_size += 2;
-                    } else if (a.len > obm and a.len <= tbm) {
-                        pack_size += 3;
-                    } else if (a.len > tbm and a.len <= fbm) {
-                        pack_size += 5;
-                    } else {
-                        @compileError("[_]u8 is too large for MsgPack");
-                    }
+                    @compileError("[_:0]u8 is too large for MsgPack");
                 }
                 pack_size += a.len;
             } else {
@@ -155,44 +142,120 @@ fn packSize(data: anytype) comptime_int {
     return pack_size;
 }
 
-fn pack(data: anytype) void {
-    // this part is for struct
+fn pack(pack_buf: []u8, packIndex: *usize, data: anytype) void {
+    const toBytes = std.mem.toBytes;
+    const copy = std.mem.copy;
     switch (@typeInfo(@TypeOf(data))) {
-        .Bool => {
-            std.debug.print("is a Bool {}\n", .{data});
+        .Null => {
+            pack_buf[packIndex.*] = 0xc0;
+            packIndex.* += 1;
         },
-        .Float => {
-            std.debug.print("is a float {}\n", .{data});
+        .Bool => {
+            pack_buf[packIndex.*] = if (data) 0xc3 else 0xc2;
+            packIndex.* += 1;
+        },
+        .Float => |f| {
+            if (f.bits == 32) {
+                pack_buf[packIndex.*] = 0xca;
+            } else if (f.bits == 64) {
+                pack_buf[packIndex.*] = 0xcb;
+            } else {
+                //should throw error here cannot pack non 32/64 float
+            }
+            packIndex.* += 1;
+            const float_bytes = toBytes(data);
+            copy(u8, pack_buf[packIndex.*..pack_buf.len], &float_bytes);
+            packIndex.* += float_bytes.len;
         },
         .Int => |i| {
             const signedness = std.builtin.Signedness;
+            var int_header: u8 = switch (i.bits) {
+                8 => 0x0c,
+                16 => 0x0d,
+                32 => 0x0e,
+                64 => 0x0f,
+                else => {
+                    //throw error
+                },
+            };
             if (i.signedness == signedness.signed) {
-                std.debug.print("is a signed Int {}\n", .{data});
+                int_header |= 0xd0;
             } else {
-                std.debug.print("is a unsigned Int {}\n", .{data});
+                int_header |= 0xc0;
             }
+            pack_buf[packIndex.*] = int_header;
+            packIndex.* += 1;
+            const int_bytes = toBytes(@byteSwap(@TypeOf(data), data));
+            copy(u8, pack_buf[packIndex.*..pack_buf.len], &int_bytes);
+            packIndex.* += int_bytes.len;
         },
         .Array => |a| {
-            std.debug.print("is an []\n", .{});
             if (a.sentinel) |sent| {
-                std.debug.print("is an []\n", .{sent});
+                // do the same as string literals
+                _ = sent;
             } else {
+                switch (data.len) {
+                    0...0x0f => {},
+                    0x10...tbm => {},
+                    tbm + 1...fbm => {},
+                    else => {
+                        //throw error
+                    },
+                }
+
                 for (data) |item| {
-                    pack(item);
+                    pack(pack_buf, packIndex, item);
                 }
             }
         },
-        .Struct => |s| {
-            std.debug.print("is struct\n", .{});
-            inline for (s.fields) |f| {
-                pack(@field(data, f.name));
+        .Pointer => |p| {
+            // string liters
+            const slice = std.builtin.TypeInfo.Pointer.Size.Slice;
+            if (p.child == u8 and p.size == slice and p.is_const) {
+                switch (data.len) {
+                    0...hbm => {
+                        const header = 0b10100000 | @truncate(u8, data.len);
+                        pack_buf[packIndex.*] = header;
+                        packIndex.* += 1;
+                    },
+                    (hbm + 1)...obm => {
+                        const header = 0xd9;
+                        pack_buf[packIndex.*] = header;
+                        packIndex.* += 1;
+                        const size_bytes = @truncate(u8, data.len);
+                        pack_buf[packIndex.*] = size_bytes;
+                        packIndex.* += 1;
+                    },
+                    (obm + 1)...tbm => {
+                        const header = 0xda;
+                        pack_buf[packIndex.*] = header;
+                        packIndex.* += 1;
+                        const size_bytes = toBytes(@byteSwap(u16, @truncate(u16, data.len)));
+                        copy(u8, pack_buf[packIndex.*..pack_buf.len], &size_bytes);
+                        packIndex.* += size_bytes.len;
+                    },
+                    (tbm + 1)...fbm => {
+                        const header = 0xdb;
+                        pack_buf[packIndex.*] = header;
+                        packIndex.* += 1;
+                        const size_bytes = toBytes(@byteSwap(u32, @truncate(u32, data.len)));
+                        copy(u8, pack_buf[packIndex.*..pack_buf.len], &size_bytes);
+                        packIndex.* += size_bytes.len;
+                    },
+                    else => {
+                        // throw error
+                    },
+                }
+                copy(u8, pack_buf[packIndex.*..pack_buf.len], data);
+                packIndex.* += data.len;
             }
         },
-        .Optional => {
-            std.debug.print("is Optional \n", .{});
-        },
-        .Null => {
-            std.debug.print("is Null\n", .{});
+
+        .Struct => |s| {
+            inline for (s.fields) |f| {
+                pack(pack_buf, packIndex, f.name);
+                pack(pack_buf, packIndex, @field(data, f.name));
+            }
         },
         else => {},
     }
