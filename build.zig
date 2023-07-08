@@ -9,7 +9,7 @@ pub fn build(b: *std.build.Builder) void {
     lib.setBuildMode(mode);
     lib.install();
 
-    const tests = b.addTest("src/ziggypack-test.zig");
+    const tests = b.addTest("src/ziggy-pack-test.zig");
     tests.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
