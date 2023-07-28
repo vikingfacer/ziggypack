@@ -1,6 +1,6 @@
 # Ziggy Pack
 ![testing workflow](https://github.com/vikingfacer/ziggypack/actions/workflows/main.yml/badge.svg)
-
+![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)
 Ziggy Pack is a message pack library for zig written is zig.
 Ziggy Pack uses compile time reflection to get buffer size, pack and (soon)unpack.
 
